@@ -1,0 +1,16 @@
+/**
+Style. File.
+**/
+
+input {
+    outline: none;
+    border: none;
+}
+
+.preaction {
+    font-style: italic;
+}
+
+.reaction {
+    font-weight: bold;
+}

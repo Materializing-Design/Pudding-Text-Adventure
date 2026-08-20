@@ -1,0 +1,31 @@
+{
+    "meta": {
+        "title": "It is as if you were playing a text adventure",
+        "author": "An Interactive Fiction by Pippin Barr",
+        "release-nonsense": "Release 3.1 / Serial number 415926535 / Unformed 7 build Y0L0",
+        "start-location": "campfire"
+    },
+    "story": [
+        {
+            "location": "campfire",
+            "preaction": "Sniff",
+            "command": "kick dog",
+            "reaction": "Raise your eyebrow and look around you quickly.",
+            "points": 1
+        },
+        {
+            "location": "campfire",
+            "preaction": "Shift in your chair",
+            "command": "get dog",
+            "reaction": "Breathe out slowly through your nose",
+            "points": 1
+        },
+        {
+            "location": "hell",
+            "preaction": "Smirk",
+            "command": "look",
+            "reaction": "Chuckle",
+            "points": 0
+        }
+    ]
+}
