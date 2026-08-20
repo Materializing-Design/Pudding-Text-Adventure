@@ -30,46 +30,121 @@ const projectDescription = config.description?.trim()
   ? escapeHtml(config.description.trim())
   : null;
 
-const isDate = (name) => /^\d{4}-\d{2}-\d{2}$/.test(name);
+// A build folder is named YYYY-MM-DD. When more than one build lands on the same day,
+// it carries either a 24-hour time (YYYY-MM-DD-HHMM, or -HHMMSS to the second; "T"
+// works as the separator too) or a plain sequence number (YYYY-MM-DD-1, -2, …).
+//
+// Both forms exist across the repos generated from this template, so both are
+// supported: dropping the sequence form would silently delete those builds from their
+// index. The digit count disambiguates — 4 or 6 digits is a time, 1 or 2 a sequence.
+// A folder with neither counts as that day's earliest build.
+const BUILD_NAME =
+  /^(\d{4})-(\d{2})-(\d{2})(?:[-T](\d{2})(\d{2})(\d{2})?|-(\d{1,2}))?$/;
 
-const builds = readdirSync(buildsDir)
-  .filter((name) => isDate(name) && statSync(join(buildsDir, name)).isDirectory())
-  .sort()
-  .reverse();
+function parseBuildName(name) {
+  const match = BUILD_NAME.exec(name);
+  if (!match) return null;
+  const [, year, month, day, hour, minute, second, sequence] = match;
+  const at = new Date(
+    `${year}-${month}-${day}T${hour ?? "00"}:${minute ?? "00"}:${second ?? "00"}Z`
+  );
+  // The pattern alone still admits impossible values (2017-02-30, 25:70), which Date
+  // either rejects outright or silently rolls over into the next day.
+  if (Number.isNaN(at.getTime()) || !at.toISOString().startsWith(`${year}-${month}-${day}T`)) {
+    return null;
+  }
+  return {
+    name,
+    at,
+    hasTime: hour !== undefined,
+    hasSeconds: second !== undefined,
+    // Sorts sequenced builds within their day; 0 keeps an unnumbered folder first.
+    sequence: sequence === undefined ? 0 : Number(sequence),
+  };
+}
+
+const directories = readdirSync(buildsDir, { withFileTypes: true })
+  .filter((entry) => entry.isDirectory())
+  .map((entry) => entry.name);
+
+const unrecognized = directories.filter((name) => parseBuildName(name) === null);
+if (unrecognized.length > 0) {
+  console.error(
+    `Skipping folders that aren't named YYYY-MM-DD[-HHMM|-N]: ${unrecognized.join(", ")}`
+  );
+}
+
+const builds = directories
+  .map(parseBuildName)
+  .filter(Boolean)
+  // Newest first. Comparing timestamps rather than strings keeps mixed naming
+  // (2017-07-02 alongside 2017-07-02-1430) in true chronological order; sequence
+  // breaks the tie between same-day builds that carry no time.
+  .sort((a, b) => b.at - a.at || b.sequence - a.sequence || b.name.localeCompare(a.name));
 
 if (builds.length === 0) {
   console.error("No dated build folders found in builds/");
   process.exit(1);
 }
 
-const missing = builds.filter((name) => !existsSync(join(buildsDir, name, "index.html")));
+const missing = builds.filter((b) => !existsSync(join(buildsDir, b.name, "index.html")));
 if (missing.length > 0) {
-  console.error(`Skipping builds with no index.html: ${missing.join(", ")}`);
+  console.error(`Skipping builds with no index.html: ${missing.map((b) => b.name).join(", ")}`);
 }
 
-const listed = builds.filter((name) => !missing.includes(name));
+const listed = builds.filter((b) => !missing.includes(b));
 
-const longDate = (iso) =>
-  new Date(`${iso}T00:00:00Z`).toLocaleDateString("en-CA", {
+const longDate = (at) =>
+  at.toLocaleDateString("en-CA", {
     year: "numeric",
     month: "long",
     day: "numeric",
     timeZone: "UTC",
   });
 
+const clockTime = (build) =>
+  build.at.toLocaleTimeString("en-CA", {
+    hour: "2-digit",
+    minute: "2-digit",
+    ...(build.hasSeconds ? { second: "2-digit" } : {}),
+    hour12: false,
+    timeZone: "UTC",
+  });
+
 const items = listed
   .map(
-    (name) => `        <li>
-          <a href="builds/${name}/index.html">
-            <span class="date">${longDate(name)}</span>
-            <span class="iso">${name}</span>
+    (build) => `        <li>
+          <a href="builds/${build.name}/index.html">
+            <span class="when">
+              <span class="date">${longDate(build.at)}</span>${
+                build.hasTime
+                  ? `\n              <span class="time">${clockTime(build)}</span>`
+                  : build.sequence
+                    ? `\n              <span class="time">#${build.sequence}</span>`
+                    : ""
+              }
+            </span>
+            <span class="iso">${build.name}</span>
           </a>
         </li>`
   )
   .join("\n");
 
-const first = listed[listed.length - 1];
-const last = listed[0];
+// Calendar dates only — the range reads as a span of days even when the individual
+// builds within it carry times.
+const first = listed[listed.length - 1].name.slice(0, 10);
+const last = listed[0].name.slice(0, 10);
+const dayCount = new Set(listed.map((b) => b.name.slice(0, 10))).size;
+
+const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
+// A fresh template repo can sit at a single build, where "1 builds · X to X" reads
+// badly, so both the count and the range collapse to their singular forms.
+const dateRange = first === last ? first : `${first} to ${last}`;
+const buildSummary =
+  dayCount === listed.length
+    ? plural(listed.length, "build")
+    : `${plural(listed.length, "build")} across ${plural(dayCount, "day")}`;
 
 const html = `<!DOCTYPE html>
 <!-- Generated by scripts/generate-index.mjs — edit that file, not this one. -->
@@ -80,7 +155,7 @@ const html = `<!DOCTYPE html>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>${projectName} | Materializing Design</title>
   <meta name="description"
-    content="${projectName} by ${projectAuthor} — an archive of ${listed.length} dated builds, ${first} to ${last}.">
+    content="${projectName} by ${projectAuthor} — an archive of ${buildSummary}, ${dateRange}.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet"
@@ -208,9 +283,23 @@ const html = `<!DOCTYPE html>
 
     ul.builds a:focus-visible { outline: 2px solid var(--coral); outline-offset: -2px; }
 
+    .when {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: baseline;
+      gap: 0.125rem 0.625rem;
+      min-width: 0;
+    }
+
     .date { font-size: 0.9375rem; }
 
     ul.builds a:hover .date { text-decoration: underline; }
+
+    .time {
+      font-family: var(--font-heading);
+      font-size: 0.75rem;
+      color: var(--stone);
+    }
 
     .iso {
       flex-shrink: 0;
@@ -296,7 +385,7 @@ const html = `<!DOCTYPE html>
     <h1>${projectName}</h1>
     <p class="subtitle">${projectAuthor}</p>
 ${projectDescription ? `    <p class="lede">${projectDescription}</p>\n` : ""}
-    <p class="build-count">${listed.length} builds &middot; ${first} to ${last}</p>
+    <p class="build-count">${buildSummary} &middot; ${dateRange}</p>
 
     <ul class="builds">
 ${items}
@@ -333,4 +422,4 @@ ${items}
 `;
 
 writeFileSync(join(root, "index.html"), html);
-console.log(`Wrote index.html with ${listed.length} builds (${first} → ${last}).`);
+console.log(`Wrote index.html with ${buildSummary} (${dateRange}).`);
